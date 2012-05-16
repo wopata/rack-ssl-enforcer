@@ -1,29 +1,22 @@
 require 'rack/ssl-enforcer/constraint'
 
 module Rack
-
   class SslEnforcer
-
     CONSTRAINTS_BY_TYPE = {
       :hosts   => [:only_hosts, :except_hosts],
       :path    => [:only, :except],
-      :methods => [:only_methods, :except_methods]
-    }
+      :methods => [:only_methods, :except_methods] }
 
     # Warning: If you set the option force_secure_cookies to false, make sure that your cookies
     # are encoded and that you understand the consequences (see documentation)
     def initialize(app, options={})
       default_options = {
-        :redirect_to          => nil,
         :strict               => false,
         :mixed                => false,
-        :hsts                 => nil,
-        :http_port            => nil,
-        :https_port           => nil,
-        :force_secure_cookies => true
-      }
+        :force_secure_cookies => true }
       CONSTRAINTS_BY_TYPE.values.each { |constraint| default_options[constraint] = nil }
 
+      options[:ssl_host] = options.delete(:redirect_to) if options[:redirect_to]
       @app, @options = app, default_options.merge(options)
     end
 
@@ -36,7 +29,14 @@ module Rack
       end
 
       if redirect_required?
-        modify_location_and_redirect
+        uri = URI.parse "#{current_scheme}://#{@request.host}#{@request.fullpath}"
+        uri.scheme = @scheme if @scheme
+
+        h, port = destination_host, destination_port
+        uri.host = h if h
+        uri.port = port if port
+
+        redirect_to uri.to_s
       elsif ssl_request?
         status, headers, body = @app.call(env)
         flag_cookies_as_secure!(headers) if @options[:force_secure_cookies]
@@ -61,13 +61,6 @@ module Rack
       destination_host && destination_host != @request.host
     end
     
-    def modify_location_and_redirect
-      location = "#{current_scheme}://#{@request.host}#{@request.fullpath}"
-      location = replace_scheme(location, @scheme)
-      location = replace_host(location, @options[:redirect_to])
-      redirect_to(location)
-    end
-    
     def redirect_to(location)
       body = "<html><body>You are being <a href=\"#{location}\">redirected</a>.</body></html>"
       [301, { 'Content-Type' => 'text/html', 'Location' => location }, [body]]
@@ -78,8 +71,9 @@ module Rack
     end
     
     def destination_host
-      if @options[:redirect_to]
-        host_parts = URI.split(@options[:redirect_to])
+      host = @options[((@scheme || current_scheme) == 'https') ? :ssl_host : :non_ssl_host]
+      if host
+        host_parts = URI.split host
         host_parts[2] || host_parts[5]
       end
     end
@@ -119,30 +113,10 @@ module Rack
       end
     end
 
-    def replace_scheme(uri, scheme)
-      return uri if not scheme_mismatch?
-      
-      port = adjust_port_to(scheme)
-      uri_parts = URI.split(uri)
-      uri_parts[3] = port unless port.nil?
-      uri_parts[0] = scheme
-      URI::HTTP.new(*uri_parts).to_s
-    end
-    
-    def replace_host(uri, host)
-      return uri unless host_mismatch?
-      
-      host_parts = URI.split(host)
-      new_host = host_parts[2] || host_parts[5]
-      uri_parts = URI.split(uri)
-      uri_parts[2] = new_host
-      URI::HTTPS.new(*uri_parts).to_s
-    end
-    
-    def adjust_port_to(scheme)
-      if scheme == 'https'
+    def destination_port
+      if @scheme == 'https'
         @options[:https_port] if @options[:https_port] && @options[:https_port] != URI::HTTPS.default_port
-      elsif scheme == 'http'
+      else
         @options[:http_port] if @options[:http_port] && @options[:http_port] != URI::HTTP.default_port
       end
     end
@@ -169,6 +143,5 @@ module Rack
       value += "; includeSubDomains" if opts[:subdomains]
       headers.merge!({ 'Strict-Transport-Security' => value })
     end
-
   end
 end

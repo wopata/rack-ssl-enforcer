@@ -19,5 +19,6 @@ rdoc
 pkg
 .bundle
 Gemfile.lock
+/vendor/bundler
 
 ## PROJECT::SPECIFIC
