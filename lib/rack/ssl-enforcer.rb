@@ -22,6 +22,8 @@ module Rack
 
     def call(env)
       @request = Rack::Request.new(env)
+      return @app.call(env) if @request.path_info =~ %r(\A/stylesheets/)
+
       @scheme = if enforce_ssl?
         'https'
       elsif enforce_non_ssl?
